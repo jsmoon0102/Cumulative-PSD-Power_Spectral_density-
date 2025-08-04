@@ -1,0 +1,89 @@
+import mne
+import pickle
+import numpy as np
+from scipy import signal
+from pathlib import Path
+from utils.config import (
+    DATA_RAW_DIR, DATA_PROCESSED_DIR,
+    EEG_BANDPASS_FILTER, EEG_NOTCH_FILTER, ICA_COMPONENTS,
+    EEG_SAMPLING_RATE
+)
+
+def filt_data(data, lowcut, highcut, fs, order=5):
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = signal.butter(order, [low, high], btype='band')
+    data = np.nan_to_num(data)
+    return signal.filtfilt(b, a, data, axis=-1)
+
+def load_edf(file_path):
+    print(f" Loading {file_path.name}...")
+    raw = mne.io.read_raw_edf(file_path, preload=True)
+    raw.pick_types(eeg=True)
+    standard_montage = mne.channels.make_standard_montage("standard_1020")
+    raw.set_montage(standard_montage, match_case=False, on_missing='ignore')
+    raw_data = raw.get_data()
+    filtered_data = filt_data(
+        raw_data,
+        lowcut=EEG_BANDPASS_FILTER[0],
+        highcut=EEG_BANDPASS_FILTER[1],
+        fs=EEG_SAMPLING_RATE
+    )
+    raw._data = filtered_data
+    return raw
+
+def preprocess_eeg(raw):
+    print("Applying high-pass filter (≥1Hz for ICA)...")
+    raw.filter(l_freq=1.0, h_freq=None, fir_design='firwin')
+    print("Applying notch filter (60Hz)...")
+    raw.notch_filter(freqs=EEG_NOTCH_FILTER)
+    print("Applying ICA...")
+    ica = mne.preprocessing.ICA(n_components=ICA_COMPONENTS, random_state=42)
+    ica.fit(raw)
+    raw = ica.apply(raw)
+    return raw
+
+def extract_events(raw):
+    events, event_dict = mne.events_from_annotations(raw)
+    return events, event_dict
+
+def save_processed_data(raw, events, save_dir, filename):
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path = save_dir / f"{filename}.pkl"
+    with open(save_path, "wb") as f:
+        pickle.dump({"raw": raw, "events": events}, f)
+    print(f" Saved processed & filtered data: {save_path}")
+
+
+# S001 ~ S109 repeat
+
+RAW_ROOT = Path(DATA_RAW_DIR)
+PROCESSED_ROOT = Path(DATA_PROCESSED_DIR)
+
+subjects = [f"S{str(i).zfill(3)}" for i in range(1, 110)]  # S001~S109
+
+for subj in subjects:
+    raw_dir = RAW_ROOT / subj
+    proc_dir = PROCESSED_ROOT / subj
+
+    if not raw_dir.exists():
+        print(f" Subject folder not found: {raw_dir}")
+        continue
+
+    edf_files = list(raw_dir.glob("*.edf"))
+    if not edf_files:
+        print(f" No EDF files found in {raw_dir}")
+        continue
+
+    print(f"\n Processing {subj} ({len(edf_files)} EDF files)")
+    for edf_file in edf_files:
+        try:
+            raw = load_edf(edf_file)
+            raw = preprocess_eeg(raw)
+            events, _ = extract_events(raw)
+            save_processed_data(raw, events, proc_dir, edf_file.stem)
+        except Exception as e:
+            print(f" Error processing {edf_file.name}: {e}")
+
+print("\n All subjects/files processed successfully!")
