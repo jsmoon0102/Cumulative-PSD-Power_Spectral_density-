@@ -34,6 +34,8 @@ Pipeline for classifying voluntary/involuntary states in EEG using minimal featu
 --All code is written in Python (3.9+), and uses standard packages:
   numpy, pandas, mne, scipy, sklearn, matplotlib.
 
+  **NEVER USE WITHOUT CITATION**
+
 
   **Contact**
 June Sung Moon
